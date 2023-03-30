@@ -1,8 +1,7 @@
 
-
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import lu.atozdigital.edms.api.dao.service.wopi.WopiService;
+import lu.atozdigital.edms.api.wopi_web._dto.WOPIDiscovery;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpServletRequest;
@@ -37,53 +36,74 @@ public class ProofKeyValidator {
      * This method checks if the wopi proof key provided in an HTTP request is valid or not.
      */
     public boolean isProofKeyValid(HttpServletRequest request) throws ExecutionException {
-        
-        // extract request url and params
-        String wopiRequestUrl = request.getRequestURL().toString();
-        String accessToken = request.getParameter(ACCESS_TOKEN_KEY);
-        String accessTokenTTL = request.getParameter(ACCESS_TOKEN_TTL);
+        // -- Timestamp validation
+
+        // get timestamp to indicate the time when the request was made (it shouldn't be older than 20min)
         String timestamp = request.getHeader(WOPI_TIMESTAMP);
-
-        wopiRequestUrl = wopiRequestUrl.replace("http", "https") +
-                "?access_token=" + encodeString(accessToken) +
-                "&access_token_ttl=" + accessTokenTTL;
-
-        // PART1: Check if request was made within the last 20min
         if (!isTimestampValid(timestamp)) {
             return false;
         }
 
-        // PART2: Verify the validity of proofKey
+        // -- ProofKey validation
+
+        // extract request url and his query params
+        String wopiRequestUrl = request.getRequestURL().toString();
+        String accessToken = request.getParameter(ACCESS_TOKEN_KEY);
+        String accessTokenTTL = request.getParameter(ACCESS_TOKEN_TTL);
+
+        // build requestUrl using encoded access token
+        var encodedWopiRequestUrl = wopiRequestUrl.replace("http", "https") +
+                "?access_token=" + encodeString(accessToken) +
+                "&access_token_ttl=" + accessTokenTTL;
 
         // get expected proof keys
-        byte[] expectedProofArray = getExpectedProofBytes(wopiRequestUrl, accessToken, timestamp);
+        byte[] expectedProofArray = getExpectedProofBytes(encodedWopiRequestUrl, accessToken, timestamp);
 
-        // public keys coming from discoveryXML
+        // get discovery xml
         var wopiDiscovery = wopiService.getDiscoveryXML();
+
+        // construct proofKey and oldProofKey from request
+        String proofKey = request.getHeader(WOPI_PROOF_KEY);
+        String oldProofKey = request.getHeader(WOPI_OLD_PROOF_KEY);
+
+        // test proofKeyValidation with expectedProofArray that contain encoded accessToken
+        if(testProofKeyValidation(proofKey, oldProofKey, expectedProofArray, wopiDiscovery)){
+            return true;
+        }
+
+        // else, test proofKeyValidation with expectedProofArray that contain non encoded accessToken (used for Excel files)
+        else{
+            var nonEncodedWopiRequestUrl = wopiRequestUrl.replace("http", "https") +
+                    "?access_token=" + accessToken +
+                    "&access_token_ttl=" + accessTokenTTL;
+            expectedProofArray = getExpectedProofBytes(nonEncodedWopiRequestUrl, accessToken, timestamp);
+            return testProofKeyValidation(proofKey, oldProofKey, expectedProofArray, wopiDiscovery);
+        }
+    }
+
+    /**
+     * test proof key validation returns true if any of this three scenarios is successful:
+     * - The X-WOPI-Proof value using the current public key
+     * - The X-WOPI-ProofOld value using the current public key
+     * - The X-WOPI-Proof value using the old public key
+
+     */
+    private static boolean testProofKeyValidation(
+            String proofKey, String oldProofKey, byte[] expectedProofArray, WOPIDiscovery wopiDiscovery) {
         String strWopiDiscoveryModulus = wopiDiscovery.getProofKey().getModulus();
         String strWopiDiscoveryExponent = wopiDiscovery.getProofKey().getExponent();
         String strWopiDiscoveryOldModulus = wopiDiscovery.getProofKey().getOldModulus();
         String strWopiDiscoveryOldExponent = wopiDiscovery.getProofKey().getOldExponent();
 
-        // proofKey and oldProofKey provided in request
-        String proofKey = request.getHeader(WOPI_PROOF_KEY);
-        String oldProofKey = request.getHeader(WOPI_OLD_PROOF_KEY);
-
-        // returns true if any of this three scenarios is successful:
-        // - The X-WOPI-Proof value using the current public key
-        // - The X-WOPI-ProofOld value using the current public key
-        // - The X-WOPI-Proof value using the old public key
-
         return verifyProofKey(strWopiDiscoveryModulus, strWopiDiscoveryExponent, proofKey, expectedProofArray) ||
                 verifyProofKey(strWopiDiscoveryModulus, strWopiDiscoveryExponent, oldProofKey, expectedProofArray) ||
                 verifyProofKey(strWopiDiscoveryOldModulus, strWopiDiscoveryOldExponent, proofKey, expectedProofArray);
-
     }
 
 
     /**
      * @param strWopiProofKey    - Proof key from REST header
-     * @param expectedProofArray - Byte Array from Specfication -- Contains querystring, time and
+     * @param expectedProofArray - Byte Array from Specification -- Contains querystring, time and
      *                          accessKey combined by defined algorithm in spec
      *                           4 bytes that represent the length, in bytes, of the access_token on the request.
      *                           The access_token.
@@ -189,7 +209,7 @@ public class ProofKeyValidator {
         // Calculate the duration between "year zero" and now
         Duration duration = Duration.between(yearZero, now);
 
-        // Extract the first 11 characters of the timestamp (assumes ISO-8601 format) to get timestamp in seconds
+        // Subtract the first 11 characters of the timestamp (assumes ISO-8601 format) to get timestamp in seconds
         final int NBR_CHARS_TO_SUBTRACT = 11;
         String unixTime = timestamp.substring(0, Math.min(timestamp.length(), NBR_CHARS_TO_SUBTRACT));
 
