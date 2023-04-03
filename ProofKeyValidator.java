@@ -28,9 +28,7 @@ public class ProofKeyValidator {
     private static final String ACCESS_TOKEN_KEY = "access_token";
     private static final String WOPI_TIMESTAMP = "X-WOPI-TimeStamp";
     private static final String ACCESS_TOKEN_TTL = "access_token_ttl";
-    private static final String TEST_ENVIRONMENT = "test";
     private final WopiService wopiService;
-    private final AppConstants appConstants;
 
     /**
      * This method checks if the wopi proof key provided in an HTTP request is valid or not.
